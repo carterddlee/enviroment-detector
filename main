@@ -1,0 +1,130 @@
+#include <Arduino_HS300x.h>
+#include <Arduino_BMI270_BMM150.h>
+#include <Arduino_APDS9960.h>
+
+float baseHumidity = 0.0;
+float baseTemperature = 0.0;
+float baseMag = 0.0;
+int baseR = 0, baseG = 0, baseB = 0, baseC = 0;
+
+bool prevBreath = false;
+bool prevMag = false;
+bool prevLight = false;
+
+unsigned long lastEventTime = 0;
+const unsigned long cooldownMs = 3000;
+
+void setup() {
+  Serial.begin(115200);
+  delay(1500);
+
+  if (!HS300x.begin()) {
+    Serial.println("Failed to initialize HS300x.");
+    while (1);
+  }
+
+  if (!IMU.begin()) {
+    Serial.println("Failed to initialize IMU.");
+    while (1);
+  }
+
+  if (!APDS.begin()) {
+    Serial.println("Failed to initialize APDS9960.");
+    while (1);
+  }
+
+  delay(2000);
+
+  baseHumidity = HS300x.readHumidity();
+  baseTemperature = HS300x.readTemperature();
+
+  float mx, my, mz;
+  if (IMU.magneticFieldAvailable()) {
+    IMU.readMagneticField(mx, my, mz);
+    baseMag = sqrt(mx * mx + my * my + mz * mz);
+  }
+
+  if (APDS.colorAvailable()) {
+    APDS.readColor(baseR, baseG, baseB, baseC);
+  }
+}
+
+void loop() {
+  float humidity = HS300x.readHumidity();
+  float temperature = HS300x.readTemperature();
+
+  float mx = 0, my = 0, mz = 0;
+  float mag = baseMag;
+  if (IMU.magneticFieldAvailable()) {
+    IMU.readMagneticField(mx, my, mz);
+    mag = sqrt(mx * mx + my * my + mz * mz);
+  }
+
+  int r = baseR, g = baseG, b = baseB, c = baseC;
+  if (APDS.colorAvailable()) {
+    APDS.readColor(r, g, b, c);
+  }
+
+  bool humid_jump = abs(humidity - baseHumidity) > 5.0;
+  bool temp_rise = abs(temperature - baseTemperature) > 2.0;
+  bool mag_shift = abs(mag - baseMag) > 25.0;
+  bool light_or_color_change =
+    abs(c - baseC) > 120 ||
+    abs(r - baseR) > 70 ||
+    abs(g - baseG) > 70 ||
+    abs(b - baseB) > 70;
+
+  bool breathEvent = humid_jump || temp_rise;
+  bool magEvent = mag_shift;
+  bool lightEvent = light_or_color_change;
+
+  String finalLabel = "BASELINE_NORMAL";
+  bool cooldownActive = (millis() - lastEventTime) < cooldownMs;
+
+  if (!cooldownActive) {
+    if (breathEvent && !prevBreath) {
+      finalLabel = "BREATH_OR_WARM_AIR_EVENT";
+      lastEventTime = millis();
+    } else if (magEvent && !prevMag) {
+      finalLabel = "MAGNETIC_DISTURBANCE_EVENT";
+      lastEventTime = millis();
+    } else if (lightEvent && !prevLight) {
+      finalLabel = "LIGHT_OR_COLOR_CHANGE_EVENT";
+      lastEventTime = millis();
+    }
+  }
+
+  prevBreath = breathEvent;
+  prevMag = magEvent;
+  prevLight = lightEvent;
+
+  Serial.print("rh=");
+  Serial.print(humidity, 2);
+  Serial.print(" temp=");
+  Serial.print(temperature, 2);
+  Serial.print(" mag=");
+  Serial.print(mag, 2);
+  Serial.print(" r=");
+  Serial.print(r);
+  Serial.print(" g=");
+  Serial.print(g);
+  Serial.print(" b=");
+  Serial.print(b);
+  Serial.print(" clear=");
+  Serial.println(c);
+
+  Serial.print("humid_jump=");
+  Serial.print(humid_jump ? 1 : 0);
+  Serial.print(" temp_rise=");
+  Serial.print(temp_rise ? 1 : 0);
+  Serial.print(" mag_shift=");
+  Serial.print(mag_shift ? 1 : 0);
+  Serial.print(" light_or_color_change=");
+  Serial.println(light_or_color_change ? 1 : 0);
+
+  Serial.print("FINAL_LABEL=");
+  Serial.println(finalLabel);
+  Serial.println();
+
+  delay(1000);
+}
